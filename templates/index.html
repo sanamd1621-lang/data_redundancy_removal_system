@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Redundancy Removal System</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="container">
+    <header>
+        <div>
+            <h1>☁ Data Redundancy Removal System</h1>
+            <p>Validate, classify and store only unique data.</p>
+        </div>
+        <div class="badge">Cloud Database</div>
+    </header>
+
+    <section class="card">
+        <h2>Add New Data</h2>
+        <form id="recordForm">
+            <div class="grid">
+                <input id="name" placeholder="Full Name *" required>
+                <input id="email" type="email" placeholder="Email *" required>
+                <input id="phone" placeholder="Phone">
+                <input id="address" placeholder="Address">
+            </div>
+
+            <div class="buttons">
+                <button type="button" onclick="validateData()">Check Data</button>
+                <button type="submit">Add Verified Data</button>
+            </div>
+        </form>
+
+        <div id="result"></div>
+    </section>
+
+    <section class="card">
+        <div class="table-header">
+            <h2>Database Records</h2>
+            <button onclick="loadRecords()" class="refresh">Refresh</button>
+        </div>
+        <div class="stats">
+            <div><strong id="total">0</strong><span>Total Records</span></div>
+            <div><strong id="verified">0</strong><span>Verified</span></div>
+            <div><strong id="review">0</strong><span>Manual Review</span></div>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Phone</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="recordsBody"></tbody>
+            </table>
+        </div>
+    </section>
+</div>
+
+<script>
+function formData() {
+    return {
+        name: document.getElementById("name").value,
+        email: document.getElementById("email").value,
+        phone: document.getElementById("phone").value,
+        address: document.getElementById("address").value
+    };
+}
+
+async function validateData() {
+    const result = document.getElementById("result");
+    result.className = "result";
+    result.innerHTML = "Checking existing data...";
+
+    const response = await fetch("/validate", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(formData())
+    });
+
+    const data = await response.json();
+
+    if (data.classification === "duplicate") {
+        result.className = "result danger";
+        result.innerHTML = `<b>Duplicate detected!</b><br>${data.message}<br>Similarity: ${data.score}%`;
+    } else if (data.classification === "false_positive") {
+        result.className = "result warning";
+        result.innerHTML = `<b>Possible false positive.</b><br>${data.message}<br>Similarity: ${data.score}%`;
+    } else {
+        result.className = "result success";
+        result.innerHTML = `<b>Unique data.</b><br>${data.message}`;
+    }
+}
+
+document.getElementById("recordForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const response = await fetch("/records", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(formData())
+    });
+
+    const data = await response.json();
+    const result = document.getElementById("result");
+
+    if (response.ok) {
+        result.className = "result success";
+        result.innerHTML = `<b>Success!</b> ${data.message}`;
+        document.getElementById("recordForm").reset();
+        loadRecords();
+    } else {
+        result.className = "result danger";
+        result.innerHTML = `<b>Rejected:</b> ${data.message}`;
+    }
+});
+
+async function loadRecords() {
+    const response = await fetch("/records");
+    const records = await response.json();
+
+    document.getElementById("total").textContent = records.length;
+    document.getElementById("verified").textContent =
+        records.filter(r => r.status === "verified").length;
+    document.getElementById("review").textContent =
+        records.filter(r => r.status === "manual_review").length;
+
+    document.getElementById("recordsBody").innerHTML = records.map(r => `
+        <tr>
+            <td>${r.id}</td>
+            <td>${escapeHtml(r.name)}</td>
+            <td>${escapeHtml(r.email)}</td>
+            <td>${escapeHtml(r.phone || "-")}</td>
+            <td><span class="status ${r.status}">${r.status}</span></td>
+            <td>${r.created_at}</td>
+            <td><button class="delete" onclick="deleteRecord(${r.id})">Delete</button></td>
+        </tr>
+    `).join("");
+}
+
+async function deleteRecord(id) {
+    if (!confirm("Delete this record?")) return;
+
+    await fetch(`/records/${id}`, {method: "DELETE"});
+    loadRecords();
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+loadRecords();
+</script>
+</body>
+</html>
