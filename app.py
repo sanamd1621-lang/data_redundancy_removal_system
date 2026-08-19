@@ -7,25 +7,38 @@ from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 
-# =========================================================================
-# LAYER 1: AES-256 ENCRYPTION & DECRYPTION UTILITIES
-# =========================================================================
-# Ensure key is exactly 32 bytes for AES-256
 AES_SECRET_KEY = b"12345678901234567890123456789012"
+DB_NAME = "database.db"
 
+# ==============================================================================
+# DATABASE SETUP
+# ==============================================================================
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            encrypted_capability TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
 
+init_db()
+
+# ==============================================================================
+# AES UTILITIES
+# ==============================================================================
 def encrypt_data(plain_text: str) -> str:
-    """Encrypts plaintext string using AES-256-CBC and returns Base64 encoded string."""
     iv = os.urandom(16)
     cipher = AES.new(AES_SECRET_KEY, AES.MODE_CBC, iv)
     padded_data = pad(plain_text.encode("utf-8"), AES.block_size)
     encrypted_bytes = cipher.encrypt(padded_data)
-    # Combine IV and ciphertext for storage/transmission
     return base64.b64encode(iv + encrypted_bytes).decode("utf-8")
 
-
 def decrypt_data(cipher_text_b64: str) -> str:
-    """Decrypts Base64 encoded AES-256-CBC payload back to plaintext."""
     data = base64.b64decode(cipher_text_b64)
     iv = data[:16]
     encrypted_bytes = data[16:]
@@ -33,103 +46,95 @@ def decrypt_data(cipher_text_b64: str) -> str:
     decrypted_padded = cipher.decrypt(encrypted_bytes)
     return unpad(decrypted_padded, AES.block_size).decode("utf-8")
 
+# ==============================================================================
+# ROUTES
+# ==============================================================================
 
-# =========================================================================
-# DATABASE SETUP
-# =========================================================================
-def init_db():
-    """Creates SQLite database and table if they do not exist."""
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS secure_data (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sensitive_info TEXT NOT NULL
-        )
-    """
-    )
-    conn.commit()
-    conn.close()
-
-
-init_db()
-
-
-# =========================================================================
-# FLASK ROUTES
-# =========================================================================
-@app.route("/")
+     # Add this right above @app.route("/api/v1/user")
+@app.route("/", methods=["GET"])
 def home():
-    """Root endpoint to verify the server is running."""
-    return jsonify(
-        {
-            "status": "success",
-            "message": "Flask AES-256 Encryption API is running successfully!",
+    return jsonify({
+        "status": "online",
+        "message": "Welcome to the Secure Data Detection API!",
+        "endpoints": {
+            "save_user": "POST /api/v1/user",
+            "get_decrypted_user": "GET /api/v1/user/decrypt/<user_id>"
         }
-    )
+    })
+# 1. Save Encrypted User Data
+@app.route("/api/v1/user", methods=["POST"])
+def user_endpoint():
+    data = request.get_json()
+    username = data.get("username")
+    capability_code = data.get("capability_code")
 
+    encrypted_cap = encrypt_data(capability_code)
 
-@app.route("/encrypt", methods=["POST"])
-def encrypt_endpoint():
-    """Receives JSON with 'data', encrypts it, and saves to SQLite."""
-    payload = request.get_json()
-    if not payload or "data" not in payload:
-        return jsonify({"error": "Missing 'data' field in request body"}), 400
-
-    plain_text = payload["data"]
-    encrypted_text = encrypt_data(plain_text)
-
-    # Store encrypted string in database
-    conn = sqlite3.connect("database.db")
+    # Save to SQLite database
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO secure_data (sensitive_info) VALUES (?)", (encrypted_text,)
+        "INSERT INTO users (username, encrypted_capability) VALUES (?, ?)",
+        (username, encrypted_cap)
     )
-    record_id = cursor.lastrowid
+    user_id = cursor.lastrowid
     conn.commit()
     conn.close()
 
-    return (
-        jsonify(
-            {
-                "id": record_id,
-                "message": "Data encrypted and stored successfully.",
-                "encrypted_data": encrypted_text,
-            }
-        ),
-        201,
-    )
+    return jsonify({
+        "status": "success",
+        "id": user_id,
+        "username": username,
+        "encrypted_capability": encrypted_cap
+    })
 
-
-@app.route("/decrypt/<int:record_id>", methods=["GET"])
-def decrypt_endpoint(record_id):
-    """Fetches encrypted data from SQLite by ID and decrypts it."""
-    conn = sqlite3.connect("database.db")
+# 2. Retrieve & Decrypt User Data
+@app.route("/api/v1/user/decrypt/<int:user_id>", methods=["GET"])
+def get_decrypted_user(user_id):
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT sensitive_info FROM secure_data WHERE id = ?", (record_id,)
-    )
+    cursor.execute("SELECT id, username, encrypted_capability FROM users WHERE id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
 
     if not row:
-        return jsonify({"error": "Record not found"}), 404
+        return jsonify({"error": "User record not found"}), 404
 
-    encrypted_text = row[0]
-    decrypted_text = decrypt_data(encrypted_text)
+    record_id, username, encrypted_cap = row
+    decrypted_cap = decrypt_data(encrypted_cap)
 
-    return jsonify(
-        {
-            "id": record_id,
-            "encrypted_data": encrypted_text,
-            "decrypted_data": decrypted_text,
-        }
-    )
+    return jsonify({
+        "id": record_id,
+        "username": username,
+        "encrypted_capability": encrypted_cap,
+        "decrypted_capability": decrypted_cap
+    })
 
+    return jsonify({
+        "id": record_id,
+        "username": username,
+        "encrypted_capability": encrypted_cap,
+        "decrypted_capability": decrypted_cap
+    })
 
-# =========================================================================
-# APPLICATION ENTRYPOINT
-# =========================================================================
+# 3. Retrieve All Users from Database
+@app.route("/api/v1/users", methods=["GET"])
+def get_all_users():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, encrypted_capability FROM users")
+    rows = cursor.fetchall()
+    conn.close()
+
+    users_list = []
+    for row in rows:
+        users_list.append({
+            "id": row[0],
+            "username": row[1],
+            "encrypted_capability": row[2]
+        })
+
+    return jsonify({"total": len(users_list), "users": users_list})
+
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=True, port=5000)
